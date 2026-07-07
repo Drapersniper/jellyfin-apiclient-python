@@ -185,6 +185,23 @@ class BiggerAPIMixin:
     def user_items(self, handler="", params=None):
         return self.users("/Items%s" % handler, params=params)
 
+    def get_playlist_items(self, playlist_id, fields=None, start_index=None,
+                           limit=None):
+        """Items of a playlist in playlist order (GET Playlists/{id}/Items).
+
+        Unlike a ``ParentId`` query, this preserves the user's playlist ordering
+        and returns each entry's ``PlaylistItemId``. ``UserId`` is filled from
+        the session so per-user data (played/resume) comes back.
+        """
+        params = {"UserId": "{UserId}"}
+        if fields is not None:
+            params["Fields"] = fields
+        if start_index is not None:
+            params["StartIndex"] = start_index
+        if limit is not None:
+            params["Limit"] = limit
+        return self._get("Playlists/%s/Items" % playlist_id, params)
+
     def shows(self, handler, params):
         return self._get("Shows%s" % handler, params)
 
