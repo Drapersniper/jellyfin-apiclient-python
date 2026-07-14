@@ -448,11 +448,41 @@ class GranularAPIMixin:
             params['Limit'] = limit
         return self.shows("/%s/Episodes" % series_id, params)
 
-    def get_genres(self, parent_id=None):
-        return self._get("Genres", {
+    def get_genres(self, parent_id=None, include_item_types=None):
+        params = {
             'ParentId': parent_id,
             'UserId': "{UserId}",
-            'Fields': info()
+            'Fields': info(),
+        }
+        if include_item_types is not None:
+            # e.g. "MusicAlbum" for a music library's genre list.
+            params['IncludeItemTypes'] = include_item_types
+        return self._get("Genres", params)
+
+    def get_artists(self, params=None):
+        """Artists (GET /Artists) — includes track-level / featured artists.
+        Pass ParentId to scope to a library, plus the usual paging/sort/filter
+        params. UserId is added so per-user data comes back."""
+        p = {"UserId": "{UserId}"}
+        if params:
+            p.update(params)
+        return self._get("Artists", p)
+
+    def get_album_artists(self, params=None):
+        """Album artists (GET /Artists/AlbumArtists) — artists credited on an
+        album, the more useful artist list. Same params as get_artists."""
+        p = {"UserId": "{UserId}"}
+        if params:
+            p.update(params)
+        return self._get("Artists/AlbumArtists", p)
+
+    def get_instant_mix(self, item_id, limit=200):
+        """A radio-style auto queue seeded from an item (GET
+        /Items/{id}/InstantMix); works for a song, album, artist, or genre."""
+        return self._get("Items/%s/InstantMix" % item_id, {
+            "UserId": "{UserId}",
+            "Limit": limit,
+            "Fields": music_info(),
         })
 
     def get_recommendation(self, parent_id=None, limit=20):
@@ -530,6 +560,46 @@ class GranularAPIMixin:
 
     def get_local_trailers(self, item_id):
         return self.user_items("/%s/LocalTrailers" % item_id)
+
+    def get_similar(self, item_id, limit=12, fields=None):
+        """Items similar to the given one (GET Items/{id}/Similar) — the
+        "More Like This" row in the official clients.
+
+        References:
+            .. [GetSimilarItems] https://api.jellyfin.org/#tag/Library/operation/GetSimilarItems
+        """
+        params = {"UserId": "{UserId}", "Limit": limit}
+        if fields is not None:
+            params["Fields"] = fields
+        return self.items("/%s/Similar" % item_id, params=params)
+
+    def get_filters(self, parent_id=None, include_item_types=None):
+        """Distinct filter values (genres, tags, official ratings, years)
+        available under a folder (GET Items/Filters) — used to build filter
+        pickers without scanning the whole library client-side.
+
+        References:
+            .. [GetQueryFiltersLegacy] https://api.jellyfin.org/#tag/Filter/operation/GetQueryFiltersLegacy
+        """
+        params = {"UserId": "{UserId}"}
+        if parent_id is not None:
+            params["ParentId"] = parent_id
+        if include_item_types is not None:
+            params["IncludeItemTypes"] = include_item_types
+        return self.items("/Filters", params=params)
+
+    def get_persons(self, search_term=None, limit=20, fields=None):
+        """Search people (GET Persons) — actors/directors for people search.
+
+        References:
+            .. [GetPersons] https://api.jellyfin.org/#tag/Persons/operation/GetPersons
+        """
+        params = {"UserId": "{UserId}", "Limit": limit}
+        if search_term is not None:
+            params["SearchTerm"] = search_term
+        if fields is not None:
+            params["Fields"] = fields
+        return self._get("Persons", params)
 
     def get_transcode_settings(self):
         return self._get('System/Configuration/encoding')
@@ -1308,6 +1378,172 @@ class ExperimentalAPIMixin:
         return resp
 
 
+class PlaylistAPIMixin:
+    """
+    Methods for creating and editing playlists.
+
+    Note: removal and reordering address playlist ENTRIES by their
+    ``PlaylistItemId`` (as returned by ``get_playlist_items``), not by the
+    underlying item id — the same item can appear in a playlist twice.
+    """
+
+    def new_playlist(self, name, item_ids=None, media_type="Video",
+                     is_public=None):
+        """
+        Create a new playlist.
+
+        Args:
+            name (str):
+                Name of the playlist to create.
+
+            item_ids (List[str] | None):
+                Item ids to seed the playlist with.
+
+            media_type (str | None):
+                The playlist media type ("Video" or "Audio").
+
+            is_public (bool | None):
+                Whether the playlist is visible to all users. When None the
+                server default is used (currently public); pass ``False`` for a
+                playlist private to its owner.
+
+        Returns:
+            Dict:
+                with one entry: "Id", the id of the new playlist.
+
+        References:
+            .. [CreatePlaylist] https://api.jellyfin.org/#tag/Playlists/operation/CreatePlaylist
+        """
+        json = {
+            "Name": name,
+            "UserId": "{UserId}",
+        }
+        if media_type is not None:
+            json["MediaType"] = media_type
+        if item_ids is not None:
+            json["Ids"] = list(item_ids)
+        if is_public is not None:
+            json["IsPublic"] = bool(is_public)
+        return self._post("Playlists", json)
+
+    def get_playlist(self, playlist_id):
+        """
+        Fetch a playlist's metadata (visibility and shares).
+
+        Args:
+            playlist_id (str):
+                Id of the playlist.
+
+        Returns:
+            Dict:
+                A ``PlaylistDto`` — notably ``OpenAccess`` (bool; True means
+                visible to all users) and ``Shares``.
+
+        References:
+            .. [GetPlaylist] https://api.jellyfin.org/#tag/Playlists/operation/GetPlaylist
+        """
+        return self._get("Playlists/%s" % playlist_id)
+
+    def update_playlist(self, playlist_id, name=None, item_ids=None,
+                        users=None, is_public=None):
+        """
+        Update a playlist's name, item order, shares, or visibility. Only the
+        arguments you pass are changed; the server leaves omitted fields alone,
+        so this is safe for a rename-only or visibility-only edit.
+
+        Args:
+            playlist_id (str):
+                Id of the playlist to update.
+
+            name (str | None):
+                New name, or None to leave unchanged.
+
+            item_ids (List[str] | None):
+                Full ordered item id list to replace the contents, or None to
+                leave the contents unchanged.
+
+            users (List[Dict] | None):
+                ``PlaylistUserPermissions`` entries to replace the share list,
+                or None to leave shares unchanged.
+
+            is_public (bool | None):
+                New visibility (True = all users, False = owner only), or None
+                to leave unchanged.
+
+        References:
+            .. [UpdatePlaylist] https://api.jellyfin.org/#tag/Playlists/operation/UpdatePlaylist
+        """
+        json = {}
+        if name is not None:
+            json["Name"] = name
+        if item_ids is not None:
+            json["Ids"] = list(item_ids)
+        if users is not None:
+            json["Users"] = list(users)
+        if is_public is not None:
+            json["IsPublic"] = bool(is_public)
+        return self._post("Playlists/%s" % playlist_id, json)
+
+    def add_playlist_items(self, playlist_id, item_ids):
+        """
+        Append items to a playlist. Folder-ish ids (a series, a season) are
+        expanded to their children by the server.
+
+        Args:
+            playlist_id (str):
+                Id of the playlist to add items to.
+
+            item_ids (List[str]):
+                Item ids to append.
+
+        References:
+            .. [AddItemToPlaylist] https://api.jellyfin.org/#tag/Playlists/operation/AddItemToPlaylist
+        """
+        params = {
+            "Ids": ",".join(item_ids),
+            "UserId": "{UserId}",
+        }
+        return self._post("Playlists/%s/Items" % playlist_id, None, params)
+
+    def remove_playlist_items(self, playlist_id, entry_ids):
+        """
+        Remove entries from a playlist.
+
+        Args:
+            playlist_id (str):
+                Id of the playlist to remove entries from.
+
+            entry_ids (List[str]):
+                ``PlaylistItemId`` values of the entries to remove (NOT the
+                item ids; see ``get_playlist_items``).
+
+        References:
+            .. [RemoveItemFromPlaylist] https://api.jellyfin.org/#tag/Playlists/operation/RemoveItemFromPlaylist
+        """
+        params = {"EntryIds": ",".join(entry_ids)}
+        return self._delete("Playlists/%s/Items" % playlist_id, params)
+
+    def move_playlist_item(self, playlist_id, entry_id, new_index):
+        """
+        Move one playlist entry to a new position.
+
+        Args:
+            playlist_id (str):
+                Id of the playlist being reordered.
+
+            entry_id (str):
+                ``PlaylistItemId`` of the entry to move.
+
+            new_index (int):
+                Target position within the playlist.
+
+        References:
+            .. [MoveItem] https://api.jellyfin.org/#tag/Playlists/operation/MoveItem
+        """
+        return self._post("Playlists/%s/Items/%s/Move/%s"
+                          % (playlist_id, entry_id, int(new_index)))
+
+
 class CollectionAPIMixin:
     """
     Methods for creating and modifying collections.
@@ -1462,9 +1698,10 @@ class CollectionAPIMixin:
             .. [RemoveFromCollection] https://api.jellyfin.org/#tag/Collection/operation/RemoveFromCollection
         """
         params = {}
-        json = {}
         params['ids'] = ','.join(item_ids)
-        return self._delete(f"Collections/{collection_id}/Items", json, params)
+        # _delete takes (handler, params); a stray positional json argument
+        # here used to make every call raise TypeError.
+        return self._delete(f"Collections/{collection_id}/Items", params)
 
 
 class BackupAPIMixin:
@@ -1590,6 +1827,7 @@ class API(
     GranularAPIMixin,
     SyncPlayAPIMixin,
     ExperimentalAPIMixin,
+    PlaylistAPIMixin,
     CollectionAPIMixin,
     BackupAPIMixin,
 ):
