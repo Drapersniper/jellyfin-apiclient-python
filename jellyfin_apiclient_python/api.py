@@ -448,11 +448,41 @@ class GranularAPIMixin:
             params['Limit'] = limit
         return self.shows("/%s/Episodes" % series_id, params)
 
-    def get_genres(self, parent_id=None):
-        return self._get("Genres", {
+    def get_genres(self, parent_id=None, include_item_types=None):
+        params = {
             'ParentId': parent_id,
             'UserId': "{UserId}",
-            'Fields': info()
+            'Fields': info(),
+        }
+        if include_item_types is not None:
+            # e.g. "MusicAlbum" for a music library's genre list.
+            params['IncludeItemTypes'] = include_item_types
+        return self._get("Genres", params)
+
+    def get_artists(self, params=None):
+        """Artists (GET /Artists) — includes track-level / featured artists.
+        Pass ParentId to scope to a library, plus the usual paging/sort/filter
+        params. UserId is added so per-user data comes back."""
+        p = {"UserId": "{UserId}"}
+        if params:
+            p.update(params)
+        return self._get("Artists", p)
+
+    def get_album_artists(self, params=None):
+        """Album artists (GET /Artists/AlbumArtists) — artists credited on an
+        album, the more useful artist list. Same params as get_artists."""
+        p = {"UserId": "{UserId}"}
+        if params:
+            p.update(params)
+        return self._get("Artists/AlbumArtists", p)
+
+    def get_instant_mix(self, item_id, limit=200):
+        """A radio-style auto queue seeded from an item (GET
+        /Items/{id}/InstantMix); works for a song, album, artist, or genre."""
+        return self._get("Items/%s/InstantMix" % item_id, {
+            "UserId": "{UserId}",
+            "Limit": limit,
+            "Fields": music_info(),
         })
 
     def get_recommendation(self, parent_id=None, limit=20):
