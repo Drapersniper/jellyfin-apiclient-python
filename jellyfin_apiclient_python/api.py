@@ -106,13 +106,27 @@ class BiggerAPIMixin:
             params=params,
         )
 
-    def sessions(self, handler="", action="GET", params=None, json=None):
+    def sessions(self, handler="", action="GET", params=None, json=None,
+                 timeout=None, retry=None):
+        """Session endpoints.
+
+        ``timeout`` and ``retry`` bound this one call instead of using the
+        client-wide defaults (30s, 5 retries). A caller polling for liveness —
+        a health check — wants a request that fails fast, since the defaults
+        can wedge its thread for minutes against an unresponsive server.
+        """
+        request = {'params': params}
+        if timeout is not None:
+            request['timeout'] = timeout
+        if retry is not None:
+            request['retry'] = retry
         if action == "POST":
-            return self._post("Sessions%s" % handler, json, params)
+            request['json'] = json
+            return self._http("POST", "Sessions%s" % handler, request)
         elif action == "DELETE":
-            return self._delete("Sessions%s" % handler, params)
+            return self._http("DELETE", "Sessions%s" % handler, request)
         else:
-            return self._get("Sessions%s" % handler, params)
+            return self._http("GET", "Sessions%s" % handler, request)
 
     def users(self, handler="", action="GET", params=None, json=None):
         if action == "POST":
@@ -340,12 +354,20 @@ class GranularAPIMixin:
             'Fields': fields if fields is not None else info()
         })
 
-    def get_items(self, item_ids):
+    def get_items(self, item_ids, fields=None):
         """
         Lookup metadata for multiple items.
 
+        The server does not preserve the requested order, and it drops ids it
+        cannot resolve, so callers that care about order should re-index the
+        result by ``Id``. Very long id lists are best sent in batches — they
+        travel in the query string, which servers and proxies cap (HTTP 414).
+
         Args:
             item_ids (List[str]): item uuids to lookup metadata for
+
+            fields (str): comma-separated Fields to request; defaults to the
+                standard ``info()`` field set.
 
         Returns:
             Dict[str, Any]: A result dictionary where the info from each
@@ -353,7 +375,7 @@ class GranularAPIMixin:
         """
         return self.users("/Items", params={
             'Ids': ','.join(str(x) for x in item_ids),
-            'Fields': info()
+            'Fields': info() if fields is None else fields
         })
 
     def update_item(self, item_id, data):
@@ -396,14 +418,35 @@ class GranularAPIMixin:
             'Limit': limit
         })
 
-    def get_recently_added(self, media=None, parent_id=None, limit=20):
-        return self.user_items("/Latest", {
+    def get_recently_added(self, media=None, parent_id=None, limit=20,
+                           fields=None, enable_image_types=None,
+                           image_type_limit=None,
+                           enable_total_record_count=None):
+        """Recently added items (GET Users/{UserId}/Items/Latest).
+
+        Answers a bare list of items, not the usual ``{"Items": [...]}``
+        envelope.
+
+        ``fields`` defaults to the broad ``info()`` set for backward
+        compatibility; pass a lean list when building a home-screen row, since
+        the default pulls MediaSources, People and Studios for every item.
+        ``enable_total_record_count=False`` skips the server's separate
+        ``COUNT(*)``, which a fixed-size row never reads.
+        """
+        params = {
             'Limit': limit,
             'UserId': "{UserId}",
             'IncludeItemTypes': media,
             'ParentId': parent_id,
-            'Fields': info()
-        })
+            'Fields': info() if fields is None else fields,
+        }
+        if enable_image_types is not None:
+            params['EnableImageTypes'] = enable_image_types
+        if image_type_limit is not None:
+            params['ImageTypeLimit'] = image_type_limit
+        if enable_total_record_count is not None:
+            params['EnableTotalRecordCount'] = enable_total_record_count
+        return self.user_items("/Latest", params)
 
     def get_next(self, index=None, limit=1, series_id=None, fields=None,
                  enable_image_types=None):
@@ -459,22 +502,48 @@ class GranularAPIMixin:
             params['IncludeItemTypes'] = include_item_types
         return self._get("Genres", params)
 
-    def get_artists(self, params=None):
-        """Artists (GET /Artists) — includes track-level / featured artists.
-        Pass ParentId to scope to a library, plus the usual paging/sort/filter
-        params. UserId is added so per-user data comes back."""
-        p = {"UserId": "{UserId}"}
+    def _artist_query(self, handler, params, parent_id, sort_by, sort_order,
+                      start_index, limit, fields, image_type_limit,
+                      enable_image_types, search_term):
+        p = {
+            "UserId": "{UserId}",
+            "ParentId": parent_id,
+            "SortBy": sort_by,
+            "SortOrder": sort_order,
+            "StartIndex": start_index,
+            "Limit": limit,
+            "Fields": fields,
+            "ImageTypeLimit": image_type_limit,
+            "EnableImageTypes": enable_image_types,
+            "SearchTerm": search_term,
+        }
+        p = {k: v for k, v in p.items() if v is not None}
         if params:
             p.update(params)
-        return self._get("Artists", p)
+        return self._get(handler, p)
 
-    def get_album_artists(self, params=None):
+    def get_artists(self, params=None, parent_id=None, sort_by=None,
+                    sort_order=None, start_index=None, limit=None, fields=None,
+                    image_type_limit=None, enable_image_types=None,
+                    search_term=None):
+        """Artists (GET /Artists) — includes track-level / featured artists.
+        Pass ``parent_id`` to scope to a library, plus the usual paging and
+        sort arguments. ``params`` is merged in last for anything this
+        signature does not name. UserId is added so per-user data comes back."""
+        return self._artist_query(
+            "Artists", params, parent_id, sort_by, sort_order, start_index,
+            limit, fields, image_type_limit, enable_image_types, search_term)
+
+    def get_album_artists(self, params=None, parent_id=None, sort_by=None,
+                          sort_order=None, start_index=None, limit=None,
+                          fields=None, image_type_limit=None,
+                          enable_image_types=None, search_term=None):
         """Album artists (GET /Artists/AlbumArtists) — artists credited on an
-        album, the more useful artist list. Same params as get_artists."""
-        p = {"UserId": "{UserId}"}
-        if params:
-            p.update(params)
-        return self._get("Artists/AlbumArtists", p)
+        album, the more useful artist list. Same arguments as get_artists."""
+        return self._artist_query(
+            "Artists/AlbumArtists", params, parent_id, sort_by, sort_order,
+            start_index, limit, fields, image_type_limit, enable_image_types,
+            search_term)
 
     def get_instant_mix(self, item_id, limit=200):
         """A radio-style auto queue seeded from an item (GET
@@ -539,12 +608,340 @@ class GranularAPIMixin:
             'parentId': parent_id,
         })
 
-    def get_channels(self):
-        return self._get("LiveTv/Channels", {
+    def get_user_items(self, parent_id=None, include_item_types=None,
+                       media_types=None, recursive=None, sort_by=None,
+                       sort_order=None, start_index=None, limit=None,
+                       fields=None, filters=None, ids=None, genres=None,
+                       genre_ids=None, years=None, person_ids=None,
+                       artist_ids=None, album_artist_ids=None,
+                       search_term=None, is_favorite=None,
+                       name_starts_with=None, name_less_than=None,
+                       image_type_limit=None, enable_image_types=None,
+                       enable_images=None, enable_user_data=None,
+                       enable_total_record_count=None, params=None):
+        """The general item query (GET Users/{UserId}/Items).
+
+        This is the endpoint behind every library grid: pass ``parent_id`` to
+        scope to a folder or library, ``recursive=True`` to search below it,
+        and the usual sort/page/filter arguments. Arguments left at ``None``
+        are not sent, so the server's own defaults apply.
+
+        ``filters`` takes Jellyfin's ``Filters`` enum as a comma-separated
+        string (``"IsUnplayed"``, ``"IsResumable"``, ``"IsFavorite"``, …).
+        ``params`` is merged in last, for query parameters this signature does
+        not name.
+
+        Prefer the narrower helpers where one exists (``get_resume_items``,
+        ``get_album_tracks``, ``get_artist_albums``, ``get_playlists``,
+        ``get_random_items``, ``search_media_items``) — they document intent
+        and pick the right sort.
+
+        References:
+            .. [GetItems] https://api.jellyfin.org/#tag/Items/operation/GetItems
+        """
+        query = {
+            'ParentId': parent_id,
+            'IncludeItemTypes': include_item_types,
+            'MediaTypes': media_types,
+            'Recursive': recursive,
+            'SortBy': sort_by,
+            'SortOrder': sort_order,
+            'StartIndex': start_index,
+            'Limit': limit,
+            'Fields': fields,
+            'Filters': filters,
+            'Ids': ','.join(str(x) for x in ids) if ids is not None else None,
+            'Genres': genres,
+            'GenreIds': genre_ids,
+            'Years': years,
+            'PersonIds': person_ids,
+            'ArtistIds': artist_ids,
+            'AlbumArtistIds': album_artist_ids,
+            'SearchTerm': search_term,
+            'IsFavorite': is_favorite,
+            'NameStartsWith': name_starts_with,
+            'NameLessThan': name_less_than,
+            'ImageTypeLimit': image_type_limit,
+            'EnableImageTypes': enable_image_types,
+            'EnableImages': enable_images,
+            'EnableUserData': enable_user_data,
+            'EnableTotalRecordCount': enable_total_record_count,
+        }
+        query = {k: v for k, v in query.items() if v is not None}
+        if params:
+            query.update(params)
+        return self.user_items(params=query)
+
+    def get_resume_items(self, limit=20, parent_id=None,
+                         include_item_types=None, media_types=None,
+                         fields=None, image_type_limit=None,
+                         enable_image_types=None,
+                         enable_total_record_count=None):
+        """Items the user can resume, most recently played first — the
+        "Continue Watching" row.
+
+        Pass ``media_types="Audio"`` for the audio equivalent ("Continue
+        Listening"); it catches Audio and AudioBook without enumerating types.
+
+        Leaving ``parent_id`` unset is meaningful: the server applies the
+        user's "Display in home screen sections" library exclusions only to
+        queries that carry no ``ParentId``.
+        """
+        return self.get_user_items(
+            parent_id=parent_id, include_item_types=include_item_types,
+            media_types=media_types, recursive=True, filters="IsResumable",
+            sort_by="DatePlayed", sort_order="Descending", limit=limit,
+            fields=fields, image_type_limit=image_type_limit,
+            enable_image_types=enable_image_types,
+            enable_total_record_count=enable_total_record_count)
+
+    def get_random_items(self, parent_id=None, include_item_types=None,
+                         limit=100, fields=None, image_types=None,
+                         max_official_rating=None, enable_images=None,
+                         enable_total_record_count=None):
+        """A random sample of items, shuffled by the server (``SortBy=Random``)
+        so it spans the whole library rather than one loaded page.
+
+        ``image_types`` restricts the result to items that *have* that image
+        (e.g. ``"Backdrop"`` when picking artwork), which is not the same as
+        ``enable_image_types``.
+        """
+        return self.get_user_items(
+            parent_id=parent_id, include_item_types=include_item_types,
+            recursive=True, sort_by="Random", limit=limit, fields=fields,
+            enable_images=enable_images,
+            enable_total_record_count=enable_total_record_count,
+            params={k: v for k, v in (
+                ('ImageTypes', image_types),
+                ('MaxOfficialRating', max_official_rating),
+            ) if v is not None})
+
+    def get_items_by_person(self, person_id, include_item_types="Movie,Series",
+                            sort_by="SortName", sort_order="Ascending",
+                            start_index=None, limit=None, fields=None,
+                            image_type_limit=None, enable_image_types=None):
+        """A person's filmography — everything they are credited on."""
+        return self.get_user_items(
+            person_ids=person_id, include_item_types=include_item_types,
+            recursive=True, sort_by=sort_by, sort_order=sort_order,
+            start_index=start_index, limit=limit, fields=fields,
+            image_type_limit=image_type_limit,
+            enable_image_types=enable_image_types)
+
+    def get_album_tracks(self, album_id, fields=None):
+        """An album's tracks in disc/track order.
+
+        Sorted by ``ParentIndexNumber`` (disc) before ``IndexNumber`` (track),
+        which is what keeps a multi-disc album in album order rather than
+        interleaving the discs.
+        """
+        return self.get_user_items(
+            parent_id=album_id, fields=fields, sort_order="Ascending",
+            sort_by="ParentIndexNumber,IndexNumber,SortName")
+
+    def get_artist_albums(self, artist_id, fields=None, limit=None,
+                          image_type_limit=None, enable_image_types=None):
+        """Albums credited to an album artist, newest first.
+
+        Uses ``AlbumArtistIds``, not ``ArtistIds``: the latter also matches
+        albums the artist merely guests on a track of.
+        """
+        return self.get_user_items(
+            album_artist_ids=artist_id, include_item_types="MusicAlbum",
+            recursive=True, sort_by="PremiereDate,ProductionYear,SortName",
+            sort_order="Descending", limit=limit, fields=fields,
+            image_type_limit=image_type_limit,
+            enable_image_types=enable_image_types)
+
+    def get_artist_songs(self, artist_id, limit=None, fields=None):
+        """Every track an artist appears on, in album order.
+
+        Uses ``ArtistIds`` (not ``AlbumArtistIds``) so featured appearances
+        are included — this backs "play everything by X".
+        """
+        return self.get_user_items(
+            artist_ids=artist_id, include_item_types="Audio", recursive=True,
+            sort_by="AlbumArtist,Album,ParentIndexNumber,IndexNumber,SortName",
+            limit=limit, fields=fields)
+
+    def get_genre_songs(self, genre_id, parent_id=None, limit=None,
+                        fields=None):
+        """Every track in a genre, optionally scoped to one music library."""
+        return self.get_user_items(
+            genre_ids=genre_id, parent_id=parent_id,
+            include_item_types="Audio", recursive=True,
+            sort_by="AlbumArtist,Album,ParentIndexNumber,IndexNumber,SortName",
+            limit=limit, fields=fields)
+
+    def get_endpoint_info(self):
+        """Where the server thinks this connection came from (GET
+        System/Endpoint) — ``{"IsLocal": bool, "IsInNetwork": bool}``.
+
+        ``IsInNetwork`` is judged against the admin-configured LAN subnets, so
+        it is the server's own answer to "is this client remote?", which a
+        client cannot always work out for itself (notably over IPv6, where
+        home networks use globally-routable addresses).
+
+        References:
+            .. [GetEndpointInfo] https://api.jellyfin.org/#tag/System/operation/GetEndpointInfo
+        """
+        return self._get("System/Endpoint")
+
+    def update_user_settings(self, data, client="emby"):
+        """Write back the display preferences read by ``get_user_settings``
+        (POST DisplayPreferences/usersettings).
+
+        There is no partial-update path on this API: the server replaces the
+        whole document, so pass a DTO you read with ``get_user_settings`` and
+        mutated, or you will drop settings other clients wrote.
+
+        ``client`` must match the namespace the settings were read from — the
+        official web client uses ``"emby"``, and any other string addresses a
+        different, empty preference set.
+
+        References:
+            .. [UpdateDisplayPreferences] https://api.jellyfin.org/#tag/DisplayPreferences/operation/UpdateDisplayPreferences
+        """
+        return self._post("DisplayPreferences/usersettings", json=data,
+                          params={"userId": "{UserId}", "client": client})
+
+    def get_channels(self, limit=None, start_index=None, fields=None,
+                     enable_images=True, enable_user_data=True,
+                     image_type_limit=None, enable_image_types=None,
+                     add_current_program=None, is_favorite=None):
+        """Live TV channels (GET LiveTv/Channels).
+
+        The no-argument call is unbounded, which is only safe for small tuner
+        line-ups: an M3U/IPTV source with thousands of channels answers with
+        all of them, with images and user data. Pass ``limit``/``start_index``
+        to page. Unlike the item endpoints there is no way to skip the total
+        record count — this controller always computes and returns it.
+
+        ``add_current_program`` (server default: true) attaches each channel's
+        currently-airing program, which is what lets a channel list show "what
+        is on now" without a second request to ``get_programs``.
+
+        References:
+            .. [GetLiveTvChannels] https://api.jellyfin.org/#tag/LiveTv/operation/GetLiveTvChannels
+        """
+        params = {
             'UserId': "{UserId}",
-            'EnableImages': True,
-            'EnableUserData': True
-        })
+            'EnableImages': enable_images,
+            'EnableUserData': enable_user_data,
+            'Limit': limit,
+            'StartIndex': start_index,
+            'Fields': fields,
+            'ImageTypeLimit': image_type_limit,
+            'EnableImageTypes': enable_image_types,
+            'AddCurrentProgram': add_current_program,
+            'IsFavorite': is_favorite,
+        }
+        return self._get("LiveTv/Channels",
+                         {k: v for k, v in params.items() if v is not None})
+
+    def get_programs(self, channel_ids=None, library_series_id=None,
+                     min_start_date=None, max_start_date=None,
+                     min_end_date=None, max_end_date=None, is_airing=None,
+                     is_movie=None, is_series=None, is_news=None,
+                     is_kids=None, is_sports=None, genres=None,
+                     sort_by=None, sort_order=None, start_index=None,
+                     limit=None, fields=None, image_type_limit=None,
+                     enable_image_types=None, enable_user_data=None,
+                     enable_total_record_count=None):
+        """Guide entries (GET LiveTv/Programs).
+
+        ``channel_ids`` accepts a list or a comma-separated string, matching
+        the server's comma-delimited binder. ``genres`` does NOT: that one
+        binds pipe-delimited (``value.Split('|')``), so join it with ``|`` or
+        the whole string arrives as a single bogus genre.
+
+        The date bounds are how a guide grid asks for one time window. They
+        must be ISO 8601 carrying ``Z`` or an explicit offset — the server
+        binds them with ``AdjustToUniversal``, and an offset-less string
+        (including what ``str(datetime)`` produces) is accepted without being
+        shifted, silently querying the wrong window.
+
+        This is the GET form, so the whole query travels in the request line;
+        past roughly 150-200 channel ids that exceeds the default request-line
+        limit in Kestrel and common reverse proxies (414/431). Page the
+        channel set, as the official guide does. The server also offers a POST
+        form for large line-ups, which is not implemented here.
+
+        Request ``fields="ChannelInfo"`` to get ``ChannelName`` and
+        ``ChannelPrimaryImageTag`` on each program — guide data often carries
+        no artwork of its own, so the channel logo is the only image
+        available.
+
+        References:
+            .. [GetLiveTvPrograms] https://api.jellyfin.org/#tag/LiveTv/operation/GetLiveTvPrograms
+        """
+        if channel_ids is not None and not isinstance(channel_ids, str):
+            channel_ids = ','.join(str(x) for x in channel_ids)
+        params = {
+            'UserId': "{UserId}",
+            'ChannelIds': channel_ids,
+            'LibrarySeriesId': library_series_id,
+            'MinStartDate': min_start_date,
+            'MaxStartDate': max_start_date,
+            'MinEndDate': min_end_date,
+            'MaxEndDate': max_end_date,
+            'IsAiring': is_airing,
+            'IsMovie': is_movie,
+            'IsSeries': is_series,
+            'IsNews': is_news,
+            'IsKids': is_kids,
+            'IsSports': is_sports,
+            'Genres': genres,
+            'SortBy': sort_by,
+            'SortOrder': sort_order,
+            'StartIndex': start_index,
+            'Limit': limit,
+            'Fields': fields,
+            'ImageTypeLimit': image_type_limit,
+            'EnableImageTypes': enable_image_types,
+            'EnableUserData': enable_user_data,
+            'EnableTotalRecordCount': enable_total_record_count,
+        }
+        return self._get("LiveTv/Programs",
+                         {k: v for k, v in params.items() if v is not None})
+
+    def get_recommended_programs(self, is_airing=None, has_aired=None,
+                                 is_series=None, is_movie=None, is_news=None,
+                                 is_kids=None, is_sports=None, genre_ids=None,
+                                 limit=None, fields=None,
+                                 image_type_limit=None,
+                                 enable_image_types=None,
+                                 enable_user_data=None,
+                                 enable_total_record_count=None):
+        """The server's recommended guide entries (GET
+        LiveTv/Programs/Recommended).
+
+        ``is_airing=True`` is the "On Now" strip the official clients show on
+        the home screen. As with ``get_programs``, pass
+        ``fields="…,ChannelInfo"`` or most entries will have no artwork.
+
+        References:
+            .. [GetRecommendedPrograms] https://api.jellyfin.org/#tag/LiveTv/operation/GetRecommendedPrograms
+        """
+        params = {
+            'UserId': "{UserId}",
+            'IsAiring': is_airing,
+            'HasAired': has_aired,
+            'IsSeries': is_series,
+            'IsMovie': is_movie,
+            'IsNews': is_news,
+            'IsKids': is_kids,
+            'IsSports': is_sports,
+            'GenreIds': genre_ids,
+            'Limit': limit,
+            'Fields': fields,
+            'ImageTypeLimit': image_type_limit,
+            'EnableImageTypes': enable_image_types,
+            'EnableUserData': enable_user_data,
+            'EnableTotalRecordCount': enable_total_record_count,
+        }
+        return self._get("LiveTv/Programs/Recommended",
+                         {k: v for k, v in params.items() if v is not None})
 
     def get_intros(self, item_id):
         return self.user_items("/%s/Intros" % item_id)
@@ -552,8 +949,19 @@ class GranularAPIMixin:
     def get_additional_parts(self, item_id):
         return self.videos("/%s/AdditionalParts" % item_id)
 
-    def get_media_segments(self, item_id):
-        return self.media_segments("/%s" % item_id)
+    def get_media_segments(self, item_id, include_segment_types=None):
+        """Media segments (intros, outros, previews, …) for an item.
+
+        ``include_segment_types`` takes a list of segment type names; the
+        server repeats the parameter per type. Segments come from a plugin, so
+        an item can legitimately have none.
+        """
+        params = None
+        if include_segment_types is not None:
+            if isinstance(include_segment_types, str):
+                include_segment_types = [include_segment_types]
+            params = {'includeSegmentTypes': list(include_segment_types)}
+        return self.media_segments("/%s" % item_id, params)
 
     def delete_item(self, item_id):
         return self.items("/%s" % item_id, "DELETE")
@@ -905,9 +1313,18 @@ class GranularAPIMixin:
         })
 
     def close_live_stream(self, live_id):
-        return self._post("LiveStreams/Close", json={
-            'LiveStreamId': live_id
-        })
+        """Release a live stream and the tuner behind it.
+
+        The id goes in the query string because that is where the server binds
+        it (``CloseLiveStream([FromQuery, Required] string liveStreamId)``);
+        sent as a JSON body it fails model validation with a 400 and the
+        stream is never closed. Nothing reaps a leaked stream — it is freed
+        only by this call, a stop report carrying the ``LiveStreamId``, a
+        session disconnect, or a server restart — so on a single-tuner box a
+        leak means no more live TV until the server comes back.
+        """
+        return self._post("LiveStreams/Close",
+                          params={'liveStreamId': live_id})
 
     def close_transcode(self, device_id, play_session_id):
         return self._delete("Videos/ActiveEncodings", params={
@@ -924,6 +1341,41 @@ class GranularAPIMixin:
             'AudioCodec': audio_codec,
             "MaxStreamingBitrate": max_streaming_bitrate,
         })
+
+    def get_chapter_image(self, dest_file, item_id, index, tag=None,
+                          max_width=None, quality=None):
+        """Download one chapter thumbnail into ``dest_file``.
+
+        ``index`` is the chapter's position in the item's ``Chapters`` list;
+        ``tag`` is that chapter's ``ImageTag`` and is what makes the URL
+        cacheable. Chapters without an ``ImageTag`` have no image — asking for
+        one is a 404.
+
+        Use ``image_url(item_id, "Chapter", index=…, tag=…)`` instead when a
+        URL is wanted rather than the bytes.
+        """
+        params = {'tag': tag, 'maxWidth': max_width, 'quality': quality}
+        self._get_stream(
+            "Items/%s/Images/Chapter/%s" % (item_id, index), dest_file,
+            {k: v for k, v in params.items() if v is not None})
+
+    def get_trickplay_tile(self, dest_file, item_id, width, index,
+                           media_source_id=None):
+        """Download one trickplay (scrubbing preview) tile sheet into
+        ``dest_file``.
+
+        ``width`` selects which generated resolution to read and must be one
+        the server actually produced — the item's ``Trickplay`` manifest lists
+        them (request the ``Trickplay`` field to get it).
+
+        See ``trickplay_tile_url`` for the URL-building equivalent.
+        """
+        params = {}
+        if media_source_id is not None:
+            params['MediaSourceId'] = media_source_id
+        self._get_stream(
+            "Videos/%s/Trickplay/%s/%s.jpg" % (item_id, width, index),
+            dest_file, params)
 
     def get_default_headers(self):
         return self.client._get_default_headers(content_type="application/x-www-form-urlencoded; charset=UTF-8")
@@ -1387,6 +1839,19 @@ class PlaylistAPIMixin:
     underlying item id — the same item can appear in a playlist twice.
     """
 
+    def get_playlists(self, limit=None, fields=None, start_index=None,
+                      sort_by="SortName", sort_order="Ascending"):
+        """The user's playlists, as ordinary items.
+
+        Jellyfin lets a playlist's declared ``MediaType`` diverge from what it
+        actually holds, so this deliberately does not filter by media type —
+        inspect the contents (``get_playlist_items``) to classify one.
+        """
+        return self.get_user_items(
+            include_item_types="Playlist", recursive=True, sort_by=sort_by,
+            sort_order=sort_order, start_index=start_index, limit=limit,
+            fields=fields)
+
     def new_playlist(self, name, item_ids=None, media_type="Video",
                      is_public=None):
         """
@@ -1577,23 +2042,45 @@ class CollectionAPIMixin:
         result['Items'] = items
         return result
 
-    def get_collections(self, term=None):
+    def get_collections(self, term=None, limit=None, start_index=None,
+                        sort_by=None, sort_order=None, fields=None,
+                        image_type_limit=None, enable_image_types=None):
         """
         Queries for user-created collections
 
         Args:
             term (str): query string to match
 
+            limit (int): maximum collections to return; without it the server
+                answers with every collection the user can see.
+
+            start_index (int): paging offset, used with ``limit``.
+
+            sort_by (str): e.g. ``"SortName"``. Left unset, the order is
+                whatever the server returns.
+
+            sort_order (str): ``"Ascending"`` or ``"Descending"``.
+
+            fields (str): comma-separated Fields to request.
+
         Returns:
             Dict: pagenated result with key "Items"
         """
-        # note: pagenation not yet implemented
         from jellyfin_apiclient_python.constants import ItemType
-        result = self.user_items(params={
+        params = {
             'recursive': True,
             'searchTerm': term,
             'includeItemTypes': [ItemType.BOX_SET],
-        })
+            'Limit': limit,
+            'StartIndex': start_index,
+            'SortBy': sort_by,
+            'SortOrder': sort_order,
+            'Fields': fields,
+            'ImageTypeLimit': image_type_limit,
+            'EnableImageTypes': enable_image_types,
+        }
+        result = self.user_items(
+            params={k: v for k, v in params.items() if v is not None})
         return result
 
     def delete_collection(self, item_id=None, name=None):

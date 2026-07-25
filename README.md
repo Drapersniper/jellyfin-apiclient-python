@@ -103,6 +103,28 @@ The test suite is run via `tox`, and you can install it from PyPi.
  - Add API call `get_playlist_items` for fetching a playlist's contents in order
  - Add support for the backup API introduced in Jellyfin 10.11.0
  - Extend the (currently) experimental `identify` API call to include all parameters supported by Jellyfin
+ - Fix `close_live_stream` sending the stream id as a JSON body; the server binds
+   it from the query string, so the call always failed and leaked the tuner
+ - Add API call `get_user_items`, a named-argument form of the general item query
+   (`GET Users/{UserId}/Items`) that browse UIs otherwise had to build by hand
+ - Add browse API calls `get_resume_items`, `get_random_items`,
+   `get_items_by_person`, `get_album_tracks`, `get_artist_albums`,
+   `get_artist_songs`, `get_genre_songs` and `get_playlists`
+ - Add Live TV API calls `get_programs` and `get_recommended_programs`, and add
+   paging/field/`add_current_program` parameters to `get_channels`, which was
+   previously unbounded (note that `LiveTv/Channels` has no way to skip the
+   total record count, unlike the item endpoints)
+ - Add API calls `get_endpoint_info` (`System/Endpoint`) and
+   `update_user_settings`, the write side of `get_user_settings`
+ - Add API calls `get_chapter_image` and `get_trickplay_tile` for downloading
+   chapter thumbnails and scrubbing-preview tiles
+ - Add parameters `fields`, `enable_image_types`, `image_type_limit` and
+   `enable_total_record_count` to `get_recently_added`, `fields` to `get_items`,
+   and paging/sorting parameters to `get_collections`, `get_artists` and
+   `get_album_artists`
+ - Add parameters `timeout` and `retry` to `sessions`, so a health check can
+   fail fast instead of waiting out the client-wide defaults
+ - Add parameter `include_segment_types` to `get_media_segments`
 
 ## Contributing
 
