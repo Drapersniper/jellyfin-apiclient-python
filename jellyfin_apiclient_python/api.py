@@ -808,7 +808,11 @@ class GranularAPIMixin:
     def get_channels(self, limit=None, start_index=None, fields=None,
                      enable_images=True, enable_user_data=True,
                      image_type_limit=None, enable_image_types=None,
-                     add_current_program=None, is_favorite=None):
+                     add_current_program=None, is_favorite=None,
+                     sort_by=None, sort_order=None,
+                     enable_favorite_sorting=None, is_movie=None,
+                     is_series=None, is_news=None, is_kids=None,
+                     is_sports=None):
         """Live TV channels (GET LiveTv/Channels).
 
         The no-argument call is unbounded, which is only safe for small tuner
@@ -820,6 +824,19 @@ class GranularAPIMixin:
         ``add_current_program`` (server default: true) attaches each channel's
         currently-airing program, which is what lets a channel list show "what
         is on now" without a second request to ``get_programs``.
+
+        ``enable_favorite_sorting`` floats favourited channels to the top;
+        ``sort_by="DatePlayed"`` orders by when the user last watched each
+        one. Both are what the official guide's channel-order setting drives.
+
+        The ``is_*`` category flags do NOT combine the way they look like
+        they should. ``is_sports``/``is_news``/``is_kids`` become a tag
+        filter and OR among themselves, but ``is_movie`` is a separate
+        column predicate and ANDs with them — so ``is_movie=True,
+        is_news=True`` asks for a movie that is also tagged News and matches
+        nothing. Passing none of them means "every channel", which is the
+        only way to express it: passing all four is an intersection, not a
+        union. The same is true of ``get_programs``.
 
         References:
             .. [GetLiveTvChannels] https://api.jellyfin.org/#tag/LiveTv/operation/GetLiveTvChannels
@@ -835,6 +852,14 @@ class GranularAPIMixin:
             'EnableImageTypes': enable_image_types,
             'AddCurrentProgram': add_current_program,
             'IsFavorite': is_favorite,
+            'SortBy': sort_by,
+            'SortOrder': sort_order,
+            'EnableFavoriteSorting': enable_favorite_sorting,
+            'IsMovie': is_movie,
+            'IsSeries': is_series,
+            'IsNews': is_news,
+            'IsKids': is_kids,
+            'IsSports': is_sports,
         }
         return self._get("LiveTv/Channels",
                          {k: v for k, v in params.items() if v is not None})
@@ -847,13 +872,19 @@ class GranularAPIMixin:
                      sort_by=None, sort_order=None, start_index=None,
                      limit=None, fields=None, image_type_limit=None,
                      enable_image_types=None, enable_user_data=None,
-                     enable_total_record_count=None):
+                     enable_total_record_count=None,
+                     has_aired=None):
         """Guide entries (GET LiveTv/Programs).
 
         ``channel_ids`` accepts a list or a comma-separated string, matching
         the server's comma-delimited binder. ``genres`` does NOT: that one
         binds pipe-delimited (``value.Split('|')``), so join it with ``|`` or
         the whole string arrives as a single bogus genre.
+
+        ``has_aired=False`` is what an "upcoming" list asks for; ``is_airing``
+        is the narrower "on right now". They are separate filters, not two
+        spellings of one — the official clients' Programs screen pairs
+        ``has_aired=False`` with the category flags for its upcoming rows.
 
         The date bounds are how a guide grid asks for one time window. They
         must be ISO 8601 carrying ``Z`` or an explicit offset — the server
@@ -868,9 +899,13 @@ class GranularAPIMixin:
         form for large line-ups, which is not implemented here.
 
         Request ``fields="ChannelInfo"`` to get ``ChannelName`` and
-        ``ChannelPrimaryImageTag`` on each program — guide data often carries
-        no artwork of its own, so the channel logo is the only image
-        available.
+        ``ChannelNumber`` on each program. The channel's **logo** is a
+        separate field: ``AddInfoToProgramDto`` sets
+        ``ChannelPrimaryImageTag`` only under ``ChannelImage``, so ask for
+        ``fields="ChannelInfo,ChannelImage"`` — as the official clients do.
+        That matters more than it sounds, because guide data often carries
+        no artwork of its own and the channel logo is then the only image
+        available at all.
 
         References:
             .. [GetLiveTvPrograms] https://api.jellyfin.org/#tag/LiveTv/operation/GetLiveTvPrograms
@@ -886,6 +921,7 @@ class GranularAPIMixin:
             'MinEndDate': min_end_date,
             'MaxEndDate': max_end_date,
             'IsAiring': is_airing,
+            'HasAired': has_aired,
             'IsMovie': is_movie,
             'IsSeries': is_series,
             'IsNews': is_news,
@@ -918,7 +954,8 @@ class GranularAPIMixin:
 
         ``is_airing=True`` is the "On Now" strip the official clients show on
         the home screen. As with ``get_programs``, pass
-        ``fields="…,ChannelInfo"`` or most entries will have no artwork.
+        ``fields="…,ChannelInfo,ChannelImage"`` or most entries will have no
+        artwork — the logo needs the second of those, see there.
 
         References:
             .. [GetRecommendedPrograms] https://api.jellyfin.org/#tag/LiveTv/operation/GetRecommendedPrograms
@@ -942,6 +979,166 @@ class GranularAPIMixin:
         }
         return self._get("LiveTv/Programs/Recommended",
                          {k: v for k, v in params.items() if v is not None})
+
+    def get_live_tv_program(self, program_id):
+        """One guide entry, with its recording state (GET
+        LiveTv/Programs/{id}).
+
+        The ``TimerId``/``SeriesTimerId``/``Status`` fields this carries are
+        what a program page needs to decide whether its Record button reads
+        "Record" or "Cancel Recording" — the list endpoints omit them unless
+        user data is enabled, and even then are a snapshot from before the
+        user pressed anything.
+
+        References:
+            .. [GetProgram] https://api.jellyfin.org/#tag/LiveTv/operation/GetProgram
+        """
+        return self._get("LiveTv/Programs/%s" % program_id,
+                         {'UserId': "{UserId}"})
+
+    def get_live_tv_guide_info(self):
+        """The guide's available date range (GET LiveTv/GuideInfo).
+
+        ``StartDate``/``EndDate`` bound how far the date picker may go; a
+        guide that offers days the provider has no data for just shows empty
+        rows.
+
+        References:
+            .. [GetGuideInfo] https://api.jellyfin.org/#tag/LiveTv/operation/GetGuideInfo
+        """
+        return self._get("LiveTv/GuideInfo")
+
+    def get_live_tv_recordings(self, series_timer_id=None, is_in_progress=None,
+                               status=None, start_index=None, limit=None,
+                               fields=None, enable_images=None,
+                               image_type_limit=None, enable_image_types=None,
+                               enable_user_data=None,
+                               enable_total_record_count=None):
+        """Completed and in-progress recordings (GET LiveTv/Recordings).
+
+        ``is_in_progress=True`` is the "recording right now" list; the
+        unfiltered call is the recordings library. Recordings are ordinary
+        items once written, so they play through the normal item path.
+
+        References:
+            .. [GetRecordings] https://api.jellyfin.org/#tag/LiveTv/operation/GetRecordings
+        """
+        params = {
+            'UserId': "{UserId}",
+            'SeriesTimerId': series_timer_id,
+            'IsInProgress': is_in_progress,
+            'Status': status,
+            'StartIndex': start_index,
+            'Limit': limit,
+            'Fields': fields,
+            'EnableImages': enable_images,
+            'ImageTypeLimit': image_type_limit,
+            'EnableImageTypes': enable_image_types,
+            'EnableUserData': enable_user_data,
+            'EnableTotalRecordCount': enable_total_record_count,
+        }
+        return self._get("LiveTv/Recordings",
+                         {k: v for k, v in params.items() if v is not None})
+
+    def get_recording_folders(self):
+        """The virtual folders recordings are filed under (GET
+        LiveTv/Recordings/Folders) — one per recording group the server
+        keeps, which is what the Recordings screen browses into.
+
+        References:
+            .. [GetRecordingFolders] https://api.jellyfin.org/#tag/LiveTv/operation/GetRecordingFolders
+        """
+        return self._get("LiveTv/Recordings/Folders",
+                         {'UserId': "{UserId}"})
+
+    def get_live_tv_timers(self, channel_id=None, series_timer_id=None,
+                           is_active=None, is_scheduled=None):
+        """Scheduled single recordings (GET LiveTv/Timers).
+
+        ``is_active=False, is_scheduled=True`` is the "Upcoming Recordings"
+        list; ``is_active=True`` is what is recording now. The DTOs are
+        ``Timer`` objects, not items — they carry ``ProgramId``, the channel
+        and the start/end times, and are addressed by their own ``Id``.
+
+        References:
+            .. [GetTimers] https://api.jellyfin.org/#tag/LiveTv/operation/GetTimers
+        """
+        params = {
+            'ChannelId': channel_id,
+            'SeriesTimerId': series_timer_id,
+            'IsActive': is_active,
+            'IsScheduled': is_scheduled,
+        }
+        return self._get("LiveTv/Timers",
+                         {k: v for k, v in params.items() if v is not None})
+
+    def get_live_tv_timer(self, timer_id):
+        """One timer, for the recording editor (GET LiveTv/Timers/{id})."""
+        return self._get("LiveTv/Timers/%s" % timer_id)
+
+    def get_new_timer_defaults(self, program_id=None):
+        """A pre-filled timer for ``program_id`` (GET LiveTv/Timers/Defaults).
+
+        This is how a recording is created: ask the server for the defaults
+        (padding, keep-until, and the program's own channel and times), then
+        POST the result back — creating one from a hand-built DTO skips the
+        server's own configuration.
+
+        Called without ``program_id`` it returns the bare defaults, which is
+        what the series-timer editor shows for a new series rule.
+
+        References:
+            .. [GetDefaultTimer] https://api.jellyfin.org/#tag/LiveTv/operation/GetDefaultTimer
+        """
+        params = {'programId': program_id} if program_id else None
+        return self._get("LiveTv/Timers/Defaults", params)
+
+    def create_live_tv_timer(self, timer):
+        """Schedule a single recording from a ``get_new_timer_defaults``
+        payload (POST LiveTv/Timers)."""
+        return self._post("LiveTv/Timers", json=timer)
+
+    def update_live_tv_timer(self, timer_id, timer):
+        """Rewrite a timer (POST LiveTv/Timers/{id}). The whole DTO is
+        replaced, so send one you read back from ``get_live_tv_timer``."""
+        return self._post("LiveTv/Timers/%s" % timer_id, json=timer)
+
+    def cancel_live_tv_timer(self, timer_id):
+        """Cancel a scheduled recording, or stop one in progress (DELETE
+        LiveTv/Timers/{id})."""
+        return self._delete("LiveTv/Timers/%s" % timer_id)
+
+    def get_live_tv_series_timers(self, sort_by=None, sort_order=None):
+        """Series recording rules (GET LiveTv/SeriesTimers).
+
+        References:
+            .. [GetSeriesTimers] https://api.jellyfin.org/#tag/LiveTv/operation/GetSeriesTimers
+        """
+        params = {'SortBy': sort_by, 'SortOrder': sort_order}
+        return self._get("LiveTv/SeriesTimers",
+                         {k: v for k, v in params.items() if v is not None})
+
+    def get_live_tv_series_timer(self, timer_id):
+        """One series rule, for the series editor (GET
+        LiveTv/SeriesTimers/{id})."""
+        return self._get("LiveTv/SeriesTimers/%s" % timer_id)
+
+    def create_live_tv_series_timer(self, timer):
+        """Record every showing of a program (POST LiveTv/SeriesTimers).
+
+        Takes the same ``get_new_timer_defaults`` payload the single-recording
+        path uses; the server derives the series rule from the program it was
+        seeded with.
+        """
+        return self._post("LiveTv/SeriesTimers", json=timer)
+
+    def update_live_tv_series_timer(self, timer_id, timer):
+        """Rewrite a series rule (POST LiveTv/SeriesTimers/{id})."""
+        return self._post("LiveTv/SeriesTimers/%s" % timer_id, json=timer)
+
+    def cancel_live_tv_series_timer(self, timer_id):
+        """Stop recording a series (DELETE LiveTv/SeriesTimers/{id})."""
+        return self._delete("LiveTv/SeriesTimers/%s" % timer_id)
 
     def get_intros(self, item_id):
         return self.user_items("/%s/Intros" % item_id)
