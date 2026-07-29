@@ -829,10 +829,14 @@ class GranularAPIMixin:
         ``sort_by="DatePlayed"`` orders by when the user last watched each
         one. Both are what the official guide's channel-order setting drives.
 
-        The ``is_*`` category flags are OR'd by the server, so passing none of
-        them means "every channel" and passing several means "channels
-        carrying any of these" — do not pass them all to mean "everything",
-        which asks the server for a needless filter pass.
+        The ``is_*`` category flags do NOT combine the way they look like
+        they should. ``is_sports``/``is_news``/``is_kids`` become a tag
+        filter and OR among themselves, but ``is_movie`` is a separate
+        column predicate and ANDs with them — so ``is_movie=True,
+        is_news=True`` asks for a movie that is also tagged News and matches
+        nothing. Passing none of them means "every channel", which is the
+        only way to express it: passing all four is an intersection, not a
+        union. The same is true of ``get_programs``.
 
         References:
             .. [GetLiveTvChannels] https://api.jellyfin.org/#tag/LiveTv/operation/GetLiveTvChannels
@@ -895,9 +899,13 @@ class GranularAPIMixin:
         form for large line-ups, which is not implemented here.
 
         Request ``fields="ChannelInfo"`` to get ``ChannelName`` and
-        ``ChannelPrimaryImageTag`` on each program — guide data often carries
-        no artwork of its own, so the channel logo is the only image
-        available.
+        ``ChannelNumber`` on each program. The channel's **logo** is a
+        separate field: ``AddInfoToProgramDto`` sets
+        ``ChannelPrimaryImageTag`` only under ``ChannelImage``, so ask for
+        ``fields="ChannelInfo,ChannelImage"`` — as the official clients do.
+        That matters more than it sounds, because guide data often carries
+        no artwork of its own and the channel logo is then the only image
+        available at all.
 
         References:
             .. [GetLiveTvPrograms] https://api.jellyfin.org/#tag/LiveTv/operation/GetLiveTvPrograms
@@ -946,7 +954,8 @@ class GranularAPIMixin:
 
         ``is_airing=True`` is the "On Now" strip the official clients show on
         the home screen. As with ``get_programs``, pass
-        ``fields="…,ChannelInfo"`` or most entries will have no artwork.
+        ``fields="…,ChannelInfo,ChannelImage"`` or most entries will have no
+        artwork — the logo needs the second of those, see there.
 
         References:
             .. [GetRecommendedPrograms] https://api.jellyfin.org/#tag/LiveTv/operation/GetRecommendedPrograms
