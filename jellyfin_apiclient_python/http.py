@@ -81,15 +81,37 @@ class HTTP(object):
 
         return string
 
-    def request_url(self, data):
+    #: Query parameter carrying the access token on a built URL.
+    #:
+    #: ``ApiKey``, not ``api_key``: the server accepts the latter only while
+    #: ``EnableLegacyAuthorization`` is on, and it is off by default from
+    #: Jellyfin v12. Both are read in the same place
+    #: (``AuthorizationContext.GetAuthorizationInfoFromDictionary``), so this
+    #: is a spelling change and nothing more -- ``ApiKey`` has been accepted
+    #: since well before v12.
+    #:
+    #: Requests the client makes itself never rely on this. They carry
+    #: ``Authorization: MediaBrowser Token="…"``, which is the non-legacy
+    #: header scheme. This is only for URLs handed to something else -- a
+    #: media player, a downloader -- which issue their own requests.
+    APIKEY_PARAM = "ApiKey"
+
+    def request_url(self, data, include_apikey=True):
+        """Build a URL without issuing it.
+
+        ``include_apikey=False`` leaves the token out entirely, for callers
+        that can authenticate the eventual request themselves -- mpv takes
+        ``--http-header-fields``, for instance. Prefer it: a token in a URL
+        is a token in logs, in ``ps`` output and in any proxy in the path.
+        """
         if not data:
             raise AttributeError("Request cannot be empty")
 
         data = self._request(data)
 
         params = data["params"]
-        if "api_key" not in params:
-            params["api_key"] = self.config.data.get('auth.token')
+        if include_apikey and self.APIKEY_PARAM not in params:
+            params[self.APIKEY_PARAM] = self.config.data.get('auth.token')
 
         encoded_params = urllib.parse.urlencode(data["params"])
         return "%s?%s" % (data["url"], encoded_params)

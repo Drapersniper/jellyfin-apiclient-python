@@ -52,10 +52,10 @@ class InternalAPIMixin:
 
         return self.client.request(request)
 
-    def _http_url(self, action, url, request={}):
+    def _http_url(self, action, url, request={}, include_apikey=True):
         request.update({"type": action, "handler": url})
 
-        return self.client.request_url(request)
+        return self.client.request_url(request, include_apikey=include_apikey)
 
     def _http_stream(self, action, url, dest_file, request={}):
         request.update({'type': action, 'handler': url})
@@ -65,8 +65,9 @@ class InternalAPIMixin:
     def _get(self, handler, params=None):
         return self._http("GET", handler, {'params': params})
 
-    def _get_url(self, handler, params=None):
-        return self._http_url("GET", handler, {"params": params})
+    def _get_url(self, handler, params=None, include_apikey=True):
+        return self._http_url("GET", handler, {"params": params},
+                              include_apikey=include_apikey)
 
     def _post(self, handler, json=None, params=None, data=None, headers=None):
         return self._http("POST", handler, {'params': params, 'json': json,
@@ -225,15 +226,18 @@ class BiggerAPIMixin:
     def media_segments(self, handler, params=None):
         return self._get("MediaSegments%s" % handler, params)
 
-    def artwork(self, item_id, art, max_width, ext="jpg", index=None):
+    def artwork(self, item_id, art, max_width, ext="jpg", index=None,
+                include_apikey=True):
         params = {"MaxWidth": max_width, "format": ext}
         handler = ("Items/%s/Images/%s" % (item_id, art) if index is None
                    else "items/%s/images/%s/%s" % (item_id, art, index)
                    )
 
-        return self._get_url(handler, params)
+        return self._get_url(handler, params,
+                             include_apikey=include_apikey)
 
-    def audio_url(self, item_id, container=None, audio_codec=None, max_streaming_bitrate=140000000):
+    def audio_url(self, item_id, container=None, audio_codec=None,
+                  max_streaming_bitrate=140000000, include_apikey=True):
         params = {
             "UserId": "{UserId}",
             "DeviceId": "{DeviceId}",
@@ -246,9 +250,10 @@ class BiggerAPIMixin:
         if audio_codec:
             params["AudioCodec"] = audio_codec
 
-        return self._get_url("Audio/%s/universal" % item_id, params)
+        return self._get_url("Audio/%s/universal" % item_id, params,
+                             include_apikey=include_apikey)
 
-    def video_url(self, item_id, media_source_id=None):
+    def video_url(self, item_id, media_source_id=None, include_apikey=True):
         params = {
             "static": "true",
             "DeviceId": "{DeviceId}"
@@ -256,14 +261,17 @@ class BiggerAPIMixin:
         if media_source_id is not None:
             params["MediaSourceId"] = media_source_id
 
-        return self._get_url("Videos/%s/stream" % item_id, params)
+        return self._get_url("Videos/%s/stream" % item_id, params,
+                             include_apikey=include_apikey)
 
-    def download_url(self, item_id):
+    def download_url(self, item_id, include_apikey=True):
         params = {}
-        return self._get_url("Items/%s/Download" % item_id, params)
+        return self._get_url("Items/%s/Download" % item_id, params,
+                             include_apikey=include_apikey)
 
     def image_url(self, item_id, image_type="Primary", index=None, tag=None,
-                  max_width=None, fill_width=None, fill_height=None, quality=90):
+                  max_width=None, fill_width=None, fill_height=None,
+                  quality=90, include_apikey=True):
         """Build an image URL for an item.
 
         Pass ``fill_width``/``fill_height`` to crop to an exact box, or
@@ -283,21 +291,26 @@ class BiggerAPIMixin:
             params["maxWidth"] = int(max_width)
         if tag is not None:
             params["tag"] = tag
-        return self._get_url(handler, params)
+        return self._get_url(handler, params,
+                             include_apikey=include_apikey)
 
-    def subtitle_url(self, item_id, media_source_id, index, fmt, fmt_index=0):
+    def subtitle_url(self, item_id, media_source_id, index, fmt, fmt_index=0,
+                     include_apikey=True):
         """Build the external-subtitle sidecar stream URL for one stream."""
         return self._get_url(
             "Videos/%s/%s/Subtitles/%s/%s/Stream.%s"
-            % (item_id, media_source_id, index, fmt_index, fmt), {})
+            % (item_id, media_source_id, index, fmt_index, fmt), {},
+            include_apikey=include_apikey)
 
-    def trickplay_tile_url(self, item_id, width, index, media_source_id=None):
+    def trickplay_tile_url(self, item_id, width, index, media_source_id=None,
+                           include_apikey=True):
         """Build the URL for a single trickplay (scrubbing preview) tile."""
         params = {}
         if media_source_id is not None:
             params["MediaSourceId"] = media_source_id
         return self._get_url(
-            "Videos/%s/Trickplay/%s/%s.jpg" % (item_id, width, index), params)
+            "Videos/%s/Trickplay/%s/%s.jpg" % (item_id, width, index), params,
+            include_apikey=include_apikey)
 
 
 class GranularAPIMixin:

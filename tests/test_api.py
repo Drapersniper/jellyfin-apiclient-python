@@ -493,3 +493,69 @@ class TestImageStreams(RequestCaptureMixin, TestCase):
         request = self.request()
         assert request["handler"] == "Videos/item1/Trickplay/320/2.jpg"
         assert request["params"] == {"MediaSourceId": "src1"}
+
+
+class TestUrlTokenSpelling(TestCase):
+    """A built URL carries ``ApiKey``, not ``api_key``.
+
+    The server reads both in the same place
+    (``AuthorizationContext.GetAuthorizationInfoFromDictionary``), but
+    ``api_key`` is gated on ``EnableLegacyAuthorization`` -- off by default
+    from Jellyfin v12 -- while ``ApiKey`` is not. So this is a spelling
+    change and nothing more.
+
+    Requests the client issues itself never depended on this: they carry
+    ``Authorization: MediaBrowser Token="…"``, the non-legacy header scheme.
+    Only URLs handed to something else -- a media player, a downloader --
+    reach this code.
+    """
+
+    def _api(self):
+        client = Mock()
+        client.config.data = {"auth.server": "https://example.com",
+                              "auth.token": "T0KEN",
+                              "http.user_agent": "test/1.0",
+                              "http.timeout": 30,
+                              # audio_url substitutes {UserId}
+                              "auth.user_id": "U1",
+                              "app.device_id": "D1"}
+        return API(HTTP(client))
+
+    def test_a_built_url_uses_the_modern_spelling(self):
+        url = self._api().download_url("item1")
+        assert "ApiKey=T0KEN" in url
+        assert "api_key" not in url
+
+    def test_the_token_can_be_left_out_entirely(self):
+        """For callers that authenticate the eventual request themselves --
+        mpv takes --http-header-fields. A token in a URL is a token in logs,
+        in ps output and in every proxy in the path."""
+        url = self._api().download_url("item1", include_apikey=False)
+        assert "ApiKey" not in url
+        assert "api_key" not in url
+
+    def test_every_url_builder_can_be_switched_off(self):
+        api = self._api()
+        built = {
+            "artwork": api.artwork("i", "Primary", 100, include_apikey=False),
+            "audio_url": api.audio_url("i", include_apikey=False),
+            "video_url": api.video_url("i", include_apikey=False),
+            "download_url": api.download_url("i", include_apikey=False),
+            "image_url": api.image_url("i", include_apikey=False),
+            "subtitle_url": api.subtitle_url("i", "s", 1, "srt",
+                                             include_apikey=False),
+            "trickplay_tile_url": api.trickplay_tile_url(
+                "i", 320, 0, include_apikey=False),
+        }
+        for name, url in built.items():
+            assert "ApiKey" not in url, name
+            assert "api_key" not in url, name
+
+    def test_and_carries_it_by_default(self):
+        api = self._api()
+        for url in (api.artwork("i", "Primary", 100), api.audio_url("i"),
+                    api.video_url("i"), api.download_url("i"),
+                    api.image_url("i"),
+                    api.subtitle_url("i", "s", 1, "srt"),
+                    api.trickplay_tile_url("i", 320, 0)):
+            assert "ApiKey=T0KEN" in url
