@@ -756,16 +756,24 @@ class GranularAPIMixin:
     def get_random_items(self, parent_id=None, include_item_types=None,
                          limit=100, fields=None, image_types=None,
                          max_official_rating=None, enable_images=None,
-                         enable_total_record_count=None):
+                         enable_total_record_count=None, media_types=None):
         """A random sample of items, shuffled by the server (``SortBy=Random``)
         so it spans the whole library rather than one loaded page.
 
         ``image_types`` restricts the result to items that *have* that image
         (e.g. ``"Backdrop"`` when picking artwork), which is not the same as
         ``enable_image_types``.
+
+        ``media_types`` (``"Video,Audio"``) filters on what an item *is to a
+        player*, which for "give me something to queue" is usually a better
+        axis than ``include_item_types``: that one matches the concrete
+        entity the library scanner chose, so the answer depends on which
+        resolver ran (a clip in a Home Videos library is a ``Video``, the
+        same file in a movies library a ``Movie``).
         """
         return self.get_user_items(
             parent_id=parent_id, include_item_types=include_item_types,
+            media_types=media_types,
             recursive=True, sort_by="Random", limit=limit, fields=fields,
             enable_images=enable_images,
             enable_total_record_count=enable_total_record_count,
