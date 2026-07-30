@@ -449,7 +449,13 @@ class GranularAPIMixin:
         return self.user_items("/Latest", params)
 
     def get_next(self, index=None, limit=1, series_id=None, fields=None,
-                 enable_image_types=None):
+                 enable_image_types=None, image_type_limit=None):
+        """Next Up (GET /Shows/NextUp).
+
+        ``image_type_limit`` caps how many tags of each type come back per
+        item. Without it a series with twenty backdrops sends twenty tags
+        for a card that will use one; jellyfin-web sends 1 here.
+        """
         params = {
             'Limit': limit,
             'UserId': "{UserId}",
@@ -461,6 +467,8 @@ class GranularAPIMixin:
             params['Fields'] = fields
         if enable_image_types is not None:
             params['EnableImageTypes'] = enable_image_types
+        if image_type_limit is not None:
+            params['ImageTypeLimit'] = image_type_limit
         return self.shows("/NextUp", params)
 
     def get_adjacent_episodes(self, show_id, item_id):

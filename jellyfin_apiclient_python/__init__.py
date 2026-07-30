@@ -8,7 +8,7 @@ from .client import JellyfinClient
 
 #################################################################################################
 
-__version__ = '1.17.0'
+__version__ = '1.17.1'
 
 
 class NullHandler(logging.Handler):
