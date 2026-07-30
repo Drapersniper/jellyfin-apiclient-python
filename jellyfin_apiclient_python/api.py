@@ -545,14 +545,26 @@ class GranularAPIMixin:
             start_index, limit, fields, image_type_limit, enable_image_types,
             search_term)
 
-    def get_instant_mix(self, item_id, limit=200):
+    def get_instant_mix(self, item_id, limit=200, fields=None):
         """A radio-style auto queue seeded from an item (GET
-        /Items/{id}/InstantMix); works for a song, album, artist, or genre."""
-        return self._get("Items/%s/InstantMix" % item_id, {
+        /Items/{id}/InstantMix); works for a song, album, artist, or genre.
+
+        ``fields`` defaults to the ``music_info()`` set for backwards
+        compatibility, but that set is expensive here in a way it is not on a
+        single item: ``MediaStreams``, ``People`` and ``ItemCounts`` are all
+        per-item lookups, and this endpoint returns up to ``limit`` (200)
+        items, so the server does hundreds of extra queries before it answers.
+        jellyfin-web asks for no fields at all here. Pass ``fields=""`` to do
+        the same, or a lean set of your own.
+        """
+        params = {
             "UserId": "{UserId}",
             "Limit": limit,
-            "Fields": music_info(),
-        })
+        }
+        fields = music_info() if fields is None else fields
+        if fields:
+            params["Fields"] = fields
+        return self._get("Items/%s/InstantMix" % item_id, params)
 
     def get_recommendation(self, parent_id=None, limit=20):
         return self._get("Movies/Recommendations", {
