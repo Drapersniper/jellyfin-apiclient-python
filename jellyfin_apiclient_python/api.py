@@ -499,6 +499,31 @@ class GranularAPIMixin:
             params['Limit'] = limit
         return self.shows("/%s/Episodes" % series_id, params)
 
+    def get_studios(self, parent_id=None, include_item_types=None,
+                    sort_by="SortName", sort_order="Ascending",
+                    fields=None, start_index=None, limit=None):
+        """Studios / networks under a library (GET /Studios).
+
+        The by-name counterpart to ``get_genres``: it answers with Studio
+        items carrying their own ids and artwork, which is what a studios
+        screen draws and what ``StudioIds`` on an item query then filters by.
+        """
+        params = {
+            "ParentId": parent_id,
+            "UserId": "{UserId}",
+            "SortBy": sort_by,
+            "SortOrder": sort_order,
+            "Recursive": True,
+            "Fields": fields if fields is not None else "PrimaryImageAspectRatio",
+        }
+        if include_item_types is not None:
+            params["IncludeItemTypes"] = include_item_types
+        if start_index is not None:
+            params["StartIndex"] = start_index
+        if limit is not None:
+            params["Limit"] = limit
+        return self._get("Studios", params)
+
     def get_genres(self, parent_id=None, include_item_types=None):
         params = {
             'ParentId': parent_id,
