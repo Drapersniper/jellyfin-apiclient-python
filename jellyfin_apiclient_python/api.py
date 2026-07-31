@@ -52,10 +52,10 @@ class InternalAPIMixin:
 
         return self.client.request(request)
 
-    def _http_url(self, action, url, request={}):
+    def _http_url(self, action, url, request={}, include_apikey=True):
         request.update({"type": action, "handler": url})
 
-        return self.client.request_url(request)
+        return self.client.request_url(request, include_apikey=include_apikey)
 
     def _http_stream(self, action, url, dest_file, request={}):
         request.update({'type': action, 'handler': url})
@@ -65,8 +65,9 @@ class InternalAPIMixin:
     def _get(self, handler, params=None):
         return self._http("GET", handler, {'params': params})
 
-    def _get_url(self, handler, params=None):
-        return self._http_url("GET", handler, {"params": params})
+    def _get_url(self, handler, params=None, include_apikey=True):
+        return self._http_url("GET", handler, {"params": params},
+                              include_apikey=include_apikey)
 
     def _post(self, handler, json=None, params=None, data=None, headers=None):
         return self._http("POST", handler, {'params': params, 'json': json,
@@ -225,15 +226,18 @@ class BiggerAPIMixin:
     def media_segments(self, handler, params=None):
         return self._get("MediaSegments%s" % handler, params)
 
-    def artwork(self, item_id, art, max_width, ext="jpg", index=None):
+    def artwork(self, item_id, art, max_width, ext="jpg", index=None,
+                include_apikey=True):
         params = {"MaxWidth": max_width, "format": ext}
         handler = ("Items/%s/Images/%s" % (item_id, art) if index is None
                    else "items/%s/images/%s/%s" % (item_id, art, index)
                    )
 
-        return self._get_url(handler, params)
+        return self._get_url(handler, params,
+                             include_apikey=include_apikey)
 
-    def audio_url(self, item_id, container=None, audio_codec=None, max_streaming_bitrate=140000000):
+    def audio_url(self, item_id, container=None, audio_codec=None,
+                  max_streaming_bitrate=140000000, include_apikey=True):
         params = {
             "UserId": "{UserId}",
             "DeviceId": "{DeviceId}",
@@ -246,9 +250,10 @@ class BiggerAPIMixin:
         if audio_codec:
             params["AudioCodec"] = audio_codec
 
-        return self._get_url("Audio/%s/universal" % item_id, params)
+        return self._get_url("Audio/%s/universal" % item_id, params,
+                             include_apikey=include_apikey)
 
-    def video_url(self, item_id, media_source_id=None):
+    def video_url(self, item_id, media_source_id=None, include_apikey=True):
         params = {
             "static": "true",
             "DeviceId": "{DeviceId}"
@@ -256,14 +261,17 @@ class BiggerAPIMixin:
         if media_source_id is not None:
             params["MediaSourceId"] = media_source_id
 
-        return self._get_url("Videos/%s/stream" % item_id, params)
+        return self._get_url("Videos/%s/stream" % item_id, params,
+                             include_apikey=include_apikey)
 
-    def download_url(self, item_id):
+    def download_url(self, item_id, include_apikey=True):
         params = {}
-        return self._get_url("Items/%s/Download" % item_id, params)
+        return self._get_url("Items/%s/Download" % item_id, params,
+                             include_apikey=include_apikey)
 
     def image_url(self, item_id, image_type="Primary", index=None, tag=None,
-                  max_width=None, fill_width=None, fill_height=None, quality=90):
+                  max_width=None, fill_width=None, fill_height=None,
+                  quality=90, include_apikey=True):
         """Build an image URL for an item.
 
         Pass ``fill_width``/``fill_height`` to crop to an exact box, or
@@ -283,21 +291,26 @@ class BiggerAPIMixin:
             params["maxWidth"] = int(max_width)
         if tag is not None:
             params["tag"] = tag
-        return self._get_url(handler, params)
+        return self._get_url(handler, params,
+                             include_apikey=include_apikey)
 
-    def subtitle_url(self, item_id, media_source_id, index, fmt, fmt_index=0):
+    def subtitle_url(self, item_id, media_source_id, index, fmt, fmt_index=0,
+                     include_apikey=True):
         """Build the external-subtitle sidecar stream URL for one stream."""
         return self._get_url(
             "Videos/%s/%s/Subtitles/%s/%s/Stream.%s"
-            % (item_id, media_source_id, index, fmt_index, fmt), {})
+            % (item_id, media_source_id, index, fmt_index, fmt), {},
+            include_apikey=include_apikey)
 
-    def trickplay_tile_url(self, item_id, width, index, media_source_id=None):
+    def trickplay_tile_url(self, item_id, width, index, media_source_id=None,
+                           include_apikey=True):
         """Build the URL for a single trickplay (scrubbing preview) tile."""
         params = {}
         if media_source_id is not None:
             params["MediaSourceId"] = media_source_id
         return self._get_url(
-            "Videos/%s/Trickplay/%s/%s.jpg" % (item_id, width, index), params)
+            "Videos/%s/Trickplay/%s/%s.jpg" % (item_id, width, index), params,
+            include_apikey=include_apikey)
 
 
 class GranularAPIMixin:
@@ -449,7 +462,13 @@ class GranularAPIMixin:
         return self.user_items("/Latest", params)
 
     def get_next(self, index=None, limit=1, series_id=None, fields=None,
-                 enable_image_types=None):
+                 enable_image_types=None, image_type_limit=None):
+        """Next Up (GET /Shows/NextUp).
+
+        ``image_type_limit`` caps how many tags of each type come back per
+        item. Without it a series with twenty backdrops sends twenty tags
+        for a card that will use one; jellyfin-web sends 1 here.
+        """
         params = {
             'Limit': limit,
             'UserId': "{UserId}",
@@ -461,6 +480,8 @@ class GranularAPIMixin:
             params['Fields'] = fields
         if enable_image_types is not None:
             params['EnableImageTypes'] = enable_image_types
+        if image_type_limit is not None:
+            params['ImageTypeLimit'] = image_type_limit
         return self.shows("/NextUp", params)
 
     def get_adjacent_episodes(self, show_id, item_id):
@@ -490,6 +511,31 @@ class GranularAPIMixin:
         if limit is not None:
             params['Limit'] = limit
         return self.shows("/%s/Episodes" % series_id, params)
+
+    def get_studios(self, parent_id=None, include_item_types=None,
+                    sort_by="SortName", sort_order="Ascending",
+                    fields=None, start_index=None, limit=None):
+        """Studios / networks under a library (GET /Studios).
+
+        The by-name counterpart to ``get_genres``: it answers with Studio
+        items carrying their own ids and artwork, which is what a studios
+        screen draws and what ``StudioIds`` on an item query then filters by.
+        """
+        params = {
+            "ParentId": parent_id,
+            "UserId": "{UserId}",
+            "SortBy": sort_by,
+            "SortOrder": sort_order,
+            "Recursive": True,
+            "Fields": fields if fields is not None else "PrimaryImageAspectRatio",
+        }
+        if include_item_types is not None:
+            params["IncludeItemTypes"] = include_item_types
+        if start_index is not None:
+            params["StartIndex"] = start_index
+        if limit is not None:
+            params["Limit"] = limit
+        return self._get("Studios", params)
 
     def get_genres(self, parent_id=None, include_item_types=None):
         params = {
@@ -545,14 +591,26 @@ class GranularAPIMixin:
             start_index, limit, fields, image_type_limit, enable_image_types,
             search_term)
 
-    def get_instant_mix(self, item_id, limit=200):
+    def get_instant_mix(self, item_id, limit=200, fields=None):
         """A radio-style auto queue seeded from an item (GET
-        /Items/{id}/InstantMix); works for a song, album, artist, or genre."""
-        return self._get("Items/%s/InstantMix" % item_id, {
+        /Items/{id}/InstantMix); works for a song, album, artist, or genre.
+
+        ``fields`` defaults to the ``music_info()`` set for backwards
+        compatibility, but that set is expensive here in a way it is not on a
+        single item: ``MediaStreams``, ``People`` and ``ItemCounts`` are all
+        per-item lookups, and this endpoint returns up to ``limit`` (200)
+        items, so the server does hundreds of extra queries before it answers.
+        jellyfin-web asks for no fields at all here. Pass ``fields=""`` to do
+        the same, or a lean set of your own.
+        """
+        params = {
             "UserId": "{UserId}",
             "Limit": limit,
-            "Fields": music_info(),
-        })
+        }
+        fields = music_info() if fields is None else fields
+        if fields:
+            params["Fields"] = fields
+        return self._get("Items/%s/InstantMix" % item_id, params)
 
     def get_recommendation(self, parent_id=None, limit=20):
         return self._get("Movies/Recommendations", {
@@ -698,16 +756,24 @@ class GranularAPIMixin:
     def get_random_items(self, parent_id=None, include_item_types=None,
                          limit=100, fields=None, image_types=None,
                          max_official_rating=None, enable_images=None,
-                         enable_total_record_count=None):
+                         enable_total_record_count=None, media_types=None):
         """A random sample of items, shuffled by the server (``SortBy=Random``)
         so it spans the whole library rather than one loaded page.
 
         ``image_types`` restricts the result to items that *have* that image
         (e.g. ``"Backdrop"`` when picking artwork), which is not the same as
         ``enable_image_types``.
+
+        ``media_types`` (``"Video,Audio"``) filters on what an item *is to a
+        player*, which for "give me something to queue" is usually a better
+        axis than ``include_item_types``: that one matches the concrete
+        entity the library scanner chose, so the answer depends on which
+        resolver ran (a clip in a Home Videos library is a ``Video``, the
+        same file in a movies library a ``Movie``).
         """
         return self.get_user_items(
             parent_id=parent_id, include_item_types=include_item_types,
+            media_types=media_types,
             recursive=True, sort_by="Random", limit=limit, fields=fields,
             enable_images=enable_images,
             enable_total_record_count=enable_total_record_count,
